@@ -1,0 +1,156 @@
+-- 🎶 FULL LYRICS BOT SCRIPT
+repeat task.wait() until game:IsLoaded()
+
+if not getgenv().executedLyricsBot then
+    getgenv().executedLyricsBot = true
+else
+    return
+end
+
+-- Services
+local httprequest = (syn and syn.request) or http and http.request or http_request or (fluxus and fluxus.request) or request
+local HttpService = game:GetService("HttpService")
+local ChatEvents = game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents
+local Players = game:GetService("Players")
+
+-- Bot state
+local state = "ready"
+local plr = nil
+local lastRequestTime = 0
+local cooldown = 30  -- seconds
+
+-- Messaging
+local function sendMessage(text)
+    ChatEvents.SayMessageRequest:FireServer(text, "All")
+end
+
+local intros = {
+    "🎵 Let's sing!",
+    "🎤 Starting the show!",
+    "🎶 Here comes the melody!",
+    "🎧 Requested by %s — enjoy!"
+}
+
+-- Command parsing
+local function parseCommand(message)
+    local clean = message:lower():gsub('>song ', ''):gsub('"', ''):gsub(' by ', '/')
+    return string.match(clean, "(.-)/(.-)$")
+end
+
+-- Dual API lyrics fetcher
+local function fetchLyrics(songName, artist)
+    local encodedSong = songName:gsub(" ", "%%20"):lower()
+    local encodedArtist = artist:gsub(" ", "%%20"):lower()
+
+    -- Try Lyrist first
+    local lyristUrl = "https://lyrist.vercel.app/api/" .. encodedSong .. "/" .. encodedArtist
+    local response1
+    local success1, err1 = pcall(function()
+        response1 = httprequest({
+            Url = lyristUrl,
+            Method = "GET"
+        })
+    end)
+
+    if success1 and response1 and response1.Body then
+        local data = HttpService:JSONDecode(response1.Body)
+        if data and data.lyrics and data.lyrics ~= "" and not data.error then
+            return data.lyrics, "Lyrist"
+        end
+    end
+
+    -- Fallback to Lyrics.ovh
+    local ovhUrl = "https://api.lyrics.ovh/v1/" .. encodedArtist .. "/" .. encodedSong
+    local response2
+    local success2, err2 = pcall(function()
+        response2 = httprequest({
+            Url = ovhUrl,
+            Method = "GET"
+        })
+    end)
+
+    if success2 and response2 and response2.Body then
+        local data = HttpService:JSONDecode(response2.Body)
+        if data and data.lyrics and data.lyrics ~= "" then
+            return data.lyrics, "Lyrics.ovh"
+        end
+    end
+
+    return nil, nil
+end
+
+-- Chat listener
+ChatEvents:WaitForChild('OnMessageDoneFiltering').OnClientEvent:Connect(function(msgdata)
+    if state == "singing" then return end
+
+    if plr and (msgdata.FromSpeaker == plr or msgdata.FromSpeaker == Players.LocalPlayer.Name) then
+        if string.lower(msgdata.Message) == '>stop' then
+            state = "ready"
+            sendMessage('🛑 Stopped singing.')
+            return
+        end
+    end
+
+    if state == "ready" and string.match(msgdata.Message, '>song "?.-" by "?.-"') then
+        if os.time() - lastRequestTime < cooldown then
+            sendMessage("⏳ Please wait before requesting another song.")
+            return
+        end
+        lastRequestTime = os.time()
+
+        state = "loading"
+        plr = Players[msgdata.FromSpeaker].Name
+
+        local songName, artist = parseCommand(msgdata.Message)
+        if not (songName and artist) then
+            sendMessage('❌ Invalid format. Use ">song SongName by Artist"')
+            state = "ready"
+            return
+        end
+
+        sendMessage('🔄 Loading "' .. songName .. '" by ' .. artist .. '...')
+        task.wait(2)
+
+        local lyrics, source = fetchLyrics(songName, artist)
+        if not lyrics then
+            sendMessage('❌ Could not find lyrics on either API.')
+            state = "ready"
+            return
+        end
+
+        sendMessage('✅ Lyrics found using ' .. source .. '! Starting performance...')
+        task.wait(2)
+        state = "singing"
+
+        sendMessage(string.format(intros[math.random(#intros)], Players[msgdata.FromSpeaker].DisplayName))
+        task.wait(2)
+
+        for line in string.gmatch(lyrics, "[^\n]+") do
+            if state ~= "singing" then break end
+            if line ~= "" and #line < 120 then
+                sendMessage('🎙️ | ' .. line)
+                task.wait(4.5)
+            end
+        end
+
+        task.wait(2)
+        state = "ready"
+        sendMessage('🏁 Song ended. You can request another!')
+    end
+end)
+
+-- 🔁 Periodic help message
+task.spawn(function()
+    while task.wait(25) do
+        if state == "ready" then
+            sendMessage('🎵 Type ">song SongName by Artist" and I’ll sing it for you!')
+            task.wait(2)
+            sendMessage('📌 Example: ">song Yellow by Coldplay"')
+        end
+    end
+end)
+
+-- Initial greeting
+sendMessage('🎵 Type ">song SongName by Artist" and I’ll sing it for you!')
+task.wait(2)
+sendMessage('📌 Example: ">song Yellow by Coldplay"')
